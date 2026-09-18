@@ -4,10 +4,12 @@ import { useCallback, useMemo, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import SheetView from "@/components/SheetView";
+import { nest, type NestResult } from "@/lib/engine";
 import { extractPageGeometry, type PageGeometry } from "@/lib/pdf/extract";
 import { loadPdf } from "@/lib/pdf/load";
 import {
   guessCutLayer,
+  looksLikeCutLine,
   summariseLayers,
   PT_TO_MM,
   type LayerSummary,
@@ -30,6 +32,10 @@ export default function Home() {
   const [cutLayer, setCutLayer] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [gapMm, setGapMm] = useState(2);
+  const [budget, setBudget] = useState(2);
+  const [nesting, setNesting] = useState(false);
+  const [result, setResult] = useState<NestResult | null>(null);
 
   const open = useCallback(async (file: File) => {
     setState({ status: "reading", name: file.name });
@@ -37,6 +43,7 @@ export default function Home() {
       const doc = await loadPdf(file);
       const page = await extractPageGeometry(doc, 1);
       const layers = summariseLayers(page);
+      setResult(null);
       setCutLayer(guessCutLayer(layers));
       setState({ status: "ready", name: file.name, doc, page, layers });
     } catch (error) {
@@ -56,6 +63,37 @@ export default function Home() {
     },
     [open]
   );
+
+  const runNest = useCallback(async () => {
+    if (state.status !== "ready") return;
+    // One design per cut contour, one copy each, which is what a re-nest of an
+    // existing sheet means. Quantities become a setting once this is proven.
+    const designs = state.page.paths
+      .filter((p) => p.layer === cutLayer && looksLikeCutLine(p))
+      .map((path, index) => ({
+        id: `cut-${index}`,
+        paths: [path],
+        quantity: 1,
+      }));
+    if (!designs.length) return;
+
+    setNesting(true);
+    try {
+      setResult(
+        await nest(
+          designs,
+          {
+            widthMm: state.page.width * PT_TO_MM,
+            heightMm: state.page.height * PT_TO_MM,
+            marginMm: 5,
+          },
+          { gapMm, rotationStepDeg: 15, timeBudgetSeconds: budget, maxSheets: 1 }
+        )
+      );
+    } finally {
+      setNesting(false);
+    }
+  }, [state, cutLayer, gapMm, budget]);
 
   // A preview wide enough to see the cut lines but not so wide it needs
   // scrolling on a laptop.
@@ -191,10 +229,72 @@ export default function Home() {
               </section>
 
               {cutLayer !== null && (
-                <p className="rounded-lg border border-neutral-800 bg-neutral-900/60 px-3 py-2 text-xs text-neutral-400">
-                  Cut contours are drawn in cyan. Everything else is dimmed so
-                  you can check nothing has been mistaken for a cut line.
-                </p>
+                <section>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                    Nest
+                  </h2>
+                  <div className="mt-3 space-y-3">
+                    <Slider
+                      label="Gap"
+                      value={gapMm}
+                      min={0}
+                      max={10}
+                      step={0.5}
+                      suffix=" mm"
+                      onChange={setGapMm}
+                    />
+                    <Slider
+                      label="Effort"
+                      value={budget}
+                      min={1}
+                      max={20}
+                      step={1}
+                      suffix=" s"
+                      onChange={setBudget}
+                    />
+                    <button
+                      onClick={() => void runNest()}
+                      disabled={nesting}
+                      className="w-full rounded-md bg-cyan-400 px-4 py-2 text-sm font-medium text-neutral-950 transition hover:bg-cyan-300 disabled:opacity-50"
+                    >
+                      {nesting ? "Nesting…" : "Nest this sheet"}
+                    </button>
+                    <p className="text-xs text-neutral-600">
+                      The engine runs on this thread, so the page will sit still
+                      for the effort you asked for.
+                    </p>
+                  </div>
+                </section>
+              )}
+
+              {result && (
+                <section>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                    Result
+                  </h2>
+                  {result.ok ? (
+                    <dl className="mt-2 space-y-1">
+                      <Row
+                        label="Placed"
+                        value={`${result.placements.length} of ${result.validation.requested}`}
+                      />
+                      <Row
+                        label="Utilization"
+                        value={`${(result.utilization * 100).toFixed(1)} %`}
+                      />
+                      <Row
+                        label="Search"
+                        value={`${result.generations} generations in ${result.elapsedSeconds.toFixed(1)} s`}
+                      />
+                      <Row
+                        label="Validation"
+                        value={result.validation.ok ? "passed" : "FAILED"}
+                      />
+                    </dl>
+                  ) : (
+                    <p className="mt-2 text-xs text-rose-400">{result.error}</p>
+                  )}
+                </section>
               )}
 
               <button
@@ -208,6 +308,45 @@ export default function Home() {
         )}
       </div>
     </main>
+  );
+}
+
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="block">
+      <div className="flex justify-between text-xs">
+        <span className="text-neutral-400">{label}</span>
+        <span className="tabular-nums text-neutral-200">
+          {value}
+          {suffix}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 w-full accent-cyan-400"
+      />
+    </label>
   );
 }
 
