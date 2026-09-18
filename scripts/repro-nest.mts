@@ -4,7 +4,13 @@ import { readFileSync } from "node:fs";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import { extractPageGeometry } from "../src/lib/pdf/extract.js";
 import { guessCutLayer, looksLikeCutLine, summariseLayers, PT_TO_MM } from "../src/lib/pdf/geometry.js";
-const { default: createModule } = await import("../src/lib/engine/nest-engine.js");
+interface EngineModule {
+  ccall: (n: string, r: string | null, t: string[], a: unknown[]) => number;
+  UTF8ToString: (p: number) => string;
+}
+const { default: createModule } = (await import(
+  "../src/lib/engine/nest-engine.js"
+)) as { default: (o?: object) => Promise<EngineModule> };
 
 const file = process.argv[2];
 const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)) }).promise;

@@ -36,7 +36,16 @@ export interface NestResult {
   evaluations: number;
   elapsedSeconds: number;
   fromLattice: boolean;
-  designs: { id: string; usable: boolean; vertices?: number; areaMm2?: number }[];
+  designs: {
+    id: string;
+    usable: boolean;
+    /** Index into the engine's own design list, or -1 when it was dropped. */
+    designIndex: number;
+    vertices?: number;
+    searchVertices?: number;
+    searchToleranceMm?: number;
+    areaMm2?: number;
+  }[];
   validation: {
     ok: boolean;
     placed: number;

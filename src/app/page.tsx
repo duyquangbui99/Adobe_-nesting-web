@@ -5,6 +5,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import NestSettingsPanel from "@/components/NestSettingsPanel";
 import SheetSettingsPanel from "@/components/SheetSettingsPanel";
+import LayoutView from "@/components/LayoutView";
 import SheetView from "@/components/SheetView";
 import { nest, type NestResult } from "@/lib/engine";
 import {
@@ -46,6 +47,15 @@ export default function Home() {
   const [nestOptions, setNestOptions] = useState<NestingSettings>(defaultNesting);
   const [nesting, setNesting] = useState(false);
   const [result, setResult] = useState<NestResult | null>(null);
+  // Which engine design each placement came from, so the layout can be drawn
+  // with the shape the piece actually is.
+  const [pathForDesign, setPathForDesign] = useState(
+    new Map<number, import("@/lib/pdf/extract").VectorPath>()
+  );
+  // A result stops matching the controls the moment they move. Saying so beats
+  // showing numbers that quietly describe a different request.
+  const [stale, setStale] = useState(false);
+  const [view, setView] = useState<"source" | "layout">("source");
 
   const open = useCallback(async (file: File) => {
     setState({ status: "reading", name: file.name });
@@ -54,6 +64,8 @@ export default function Home() {
       const page = await extractPageGeometry(doc, 1);
       const layers = summariseLayers(page);
       setResult(null);
+      setStale(false);
+      setView("source");
       setCutLayer(guessCutLayer(layers));
       setState({ status: "ready", name: file.name, doc, page, layers });
     } catch (error) {
@@ -111,7 +123,7 @@ export default function Home() {
 
     setNesting(true);
     try {
-      setResult(
+      const nested =
         await nest(
           designs,
           {
@@ -130,8 +142,20 @@ export default function Home() {
             direction: toEngineDirection(sheet.alignment, sheet.direction),
             allowRotation: nestOptions.allowRotation,
           }
-        )
-      );
+        );
+
+      // The engine drops any design whose paths produced no outline, so its
+      // indices are not ours. Its own report carries the mapping.
+      const mapping = new Map<number, (typeof cutPaths)[number]>();
+      nested.designs?.forEach((design, index) => {
+        if (design.designIndex >= 0 && cutPaths[index])
+          mapping.set(design.designIndex, cutPaths[index]);
+      });
+
+      setPathForDesign(mapping);
+      setResult(nested);
+      setStale(false);
+      if (nested.ok && nested.placements.length) setView("layout");
     } finally {
       setNesting(false);
     }
@@ -195,14 +219,51 @@ export default function Home() {
           </div>
         ) : (
           <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
-            <div className="flex justify-center">
-              <SheetView
-                doc={state.doc}
-                page={state.page}
-                cutLayer={cutLayer}
-                highlight={highlight}
-                scale={scale}
-              />
+            <div className="space-y-3">
+              {result?.ok && result.placements.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {(["source", "layout"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setView(mode)}
+                      className={`rounded-md px-3 py-1 text-xs transition ${
+                        view === mode
+                          ? "bg-neutral-100 text-neutral-900"
+                          : "bg-neutral-900 text-neutral-400 hover:text-neutral-200"
+                      }`}
+                    >
+                      {mode === "source" ? "Original sheet" : "Nested layout"}
+                    </button>
+                  ))}
+                  {stale && (
+                    <span className="text-xs text-amber-400">
+                      Settings changed. Nest again to update.
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <div className="flex justify-center">
+                {view === "layout" && result?.ok ? (
+                  <LayoutView
+                    result={result}
+                    pathForDesign={pathForDesign}
+                    sheet={sheet}
+                    scale={Math.min(
+                      620 / (sheet.widthMm * (72 / 25.4)),
+                      760 / (sheet.heightMm * (72 / 25.4))
+                    )}
+                  />
+                ) : (
+                  <SheetView
+                    doc={state.doc}
+                    page={state.page}
+                    cutLayer={cutLayer}
+                    highlight={highlight}
+                    scale={scale}
+                  />
+                )}
+              </div>
             </div>
 
             <aside className="space-y-6 text-sm">
@@ -273,7 +334,10 @@ export default function Home() {
               <SheetSettingsPanel
                 sheet={sheet}
                 nesting={nestOptions}
-                onChange={setSheet}
+                onChange={(next) => {
+                  setSheet(next);
+                  if (result) setStale(true);
+                }}
                 onLoadPreset={(preset: Preset) => {
                   setSheet(preset.sheet);
                   setNestOptions(preset.nesting);
@@ -286,7 +350,10 @@ export default function Home() {
 
               <NestSettingsPanel
                 nesting={nestOptions}
-                onChange={setNestOptions}
+                onChange={(next) => {
+                  setNestOptions(next);
+                  if (result) setStale(true);
+                }}
                 designCount={cutPaths.length}
                 busy={nesting}
                 onRun={() => void runNest()}
@@ -333,45 +400,6 @@ export default function Home() {
         )}
       </div>
     </main>
-  );
-}
-
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  suffix,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  suffix: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block">
-      <div className="flex justify-between text-xs">
-        <span className="text-neutral-400">{label}</span>
-        <span className="tabular-nums text-neutral-200">
-          {value}
-          {suffix}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1 w-full accent-cyan-400"
-      />
-    </label>
   );
 }
 
