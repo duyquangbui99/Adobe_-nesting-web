@@ -50,7 +50,10 @@ export interface NestResult {
 export interface SheetSpec {
   widthMm: number;
   heightMm: number;
-  marginMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
+  marginTopMm: number;
+  marginBottomMm: number;
 }
 
 export interface NestSettings {
@@ -58,6 +61,10 @@ export interface NestSettings {
   rotationStepDeg: number;
   timeBudgetSeconds: number;
   maxSheets: number;
+  /** Which corner to pack towards. */
+  direction: "bottomLeft" | "topLeft" | "bottomRight" | "topRight";
+  /** Off pins every piece upright, for artwork with a print direction. */
+  allowRotation: boolean;
 }
 
 interface EngineModule {
@@ -110,19 +117,20 @@ export async function nest(
     sheet: {
       width: sheet.widthMm,
       height: sheet.heightMm,
-      marginLeft: sheet.marginMm,
-      marginRight: sheet.marginMm,
-      marginTop: sheet.marginMm,
-      marginBottom: sheet.marginMm,
+      marginLeft: sheet.marginLeftMm,
+      marginRight: sheet.marginRightMm,
+      marginTop: sheet.marginTopMm,
+      marginBottom: sheet.marginBottomMm,
     },
     gap: settings.gapMm,
     rotationStepDeg: settings.rotationStepDeg,
     maxSheets: settings.maxSheets,
+    direction: settings.direction,
     timeBudgetSeconds: settings.timeBudgetSeconds,
     designs: designs.map((d) => ({
       id: d.id,
       quantity: d.quantity,
-      rotation: "free",
+      rotation: settings.allowRotation ? "free" : "fixed",
       paths: d.paths.map(pathToEngine),
     })),
   };

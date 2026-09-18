@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Emscripten's glue and the node-side probe are generated or standalone,
+    // not source we write.
+    "src/lib/engine/nest-engine.js",
+    "scripts/**",
   ]),
 ]);
 

@@ -3,8 +3,18 @@
 import { useCallback, useMemo, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
+import NestSettingsPanel from "@/components/NestSettingsPanel";
+import SheetSettingsPanel from "@/components/SheetSettingsPanel";
 import SheetView from "@/components/SheetView";
 import { nest, type NestResult } from "@/lib/engine";
+import {
+  defaultNesting,
+  defaultSheet,
+  toEngineDirection,
+  type NestingSettings,
+  type Preset,
+  type SheetSettings,
+} from "@/lib/settings";
 import { extractPageGeometry, type PageGeometry } from "@/lib/pdf/extract";
 import { loadPdf } from "@/lib/pdf/load";
 import {
@@ -32,8 +42,8 @@ export default function Home() {
   const [cutLayer, setCutLayer] = useState<string | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [gapMm, setGapMm] = useState(2);
-  const [budget, setBudget] = useState(2);
+  const [sheet, setSheet] = useState<SheetSettings>(defaultSheet);
+  const [nestOptions, setNestOptions] = useState<NestingSettings>(defaultNesting);
   const [nesting, setNesting] = useState(false);
   const [result, setResult] = useState<NestResult | null>(null);
 
@@ -64,18 +74,40 @@ export default function Home() {
     [open]
   );
 
+  const cutPaths = useMemo(
+    () =>
+      state.status === "ready"
+        ? state.page.paths.filter(
+            (p) => p.layer === cutLayer && looksLikeCutLine(p)
+          )
+        : [],
+    [state, cutLayer]
+  );
+
   const runNest = useCallback(async () => {
-    if (state.status !== "ready") return;
-    // One design per cut contour, one copy each, which is what a re-nest of an
-    // existing sheet means. Quantities become a setting once this is proven.
-    const designs = state.page.paths
-      .filter((p) => p.layer === cutLayer && looksLikeCutLine(p))
-      .map((path, index) => ({
+    if (!cutPaths.length) return;
+
+    const usableMm2 =
+      (sheet.widthMm - sheet.marginLeftMm - sheet.marginRightMm) *
+      (sheet.heightMm - sheet.marginTopMm - sheet.marginBottomMm);
+
+    const designs = cutPaths.map((path, index) => {
+      // Filling the sheet is a quantity the engine never reaches rather than a
+      // mode it has: ask for as many as could possibly fit and let it report
+      // what did not. Bounded by the bounding box, so the ask stays sane.
+      const areaMm2 =
+        (path.bounds.maxX - path.bounds.minX) *
+        PT_TO_MM *
+        ((path.bounds.maxY - path.bounds.minY) * PT_TO_MM);
+      const couldFit = areaMm2 > 0 ? Math.floor(usableMm2 / areaMm2) + 2 : 1;
+      return {
         id: `cut-${index}`,
         paths: [path],
-        quantity: 1,
-      }));
-    if (!designs.length) return;
+        quantity: nestOptions.fillSheet
+          ? Math.min(couldFit, 400)
+          : nestOptions.quantity,
+      };
+    });
 
     setNesting(true);
     try {
@@ -83,17 +115,27 @@ export default function Home() {
         await nest(
           designs,
           {
-            widthMm: state.page.width * PT_TO_MM,
-            heightMm: state.page.height * PT_TO_MM,
-            marginMm: 5,
+            widthMm: sheet.widthMm,
+            heightMm: sheet.heightMm,
+            marginLeftMm: sheet.marginLeftMm,
+            marginRightMm: sheet.marginRightMm,
+            marginTopMm: sheet.marginTopMm,
+            marginBottomMm: sheet.marginBottomMm,
           },
-          { gapMm, rotationStepDeg: 15, timeBudgetSeconds: budget, maxSheets: 1 }
+          {
+            gapMm: sheet.spacingMm,
+            rotationStepDeg: nestOptions.rotationStepDeg,
+            timeBudgetSeconds: nestOptions.effortSeconds,
+            maxSheets: 1,
+            direction: toEngineDirection(sheet.alignment, sheet.direction),
+            allowRotation: nestOptions.allowRotation,
+          }
         )
       );
     } finally {
       setNesting(false);
     }
-  }, [state, cutLayer, gapMm, budget]);
+  }, [cutPaths, sheet, nestOptions]);
 
   // A preview wide enough to see the cut lines but not so wide it needs
   // scrolling on a laptop.
@@ -228,44 +270,27 @@ export default function Home() {
                 </ul>
               </section>
 
-              {cutLayer !== null && (
-                <section>
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-                    Nest
-                  </h2>
-                  <div className="mt-3 space-y-3">
-                    <Slider
-                      label="Gap"
-                      value={gapMm}
-                      min={0}
-                      max={10}
-                      step={0.5}
-                      suffix=" mm"
-                      onChange={setGapMm}
-                    />
-                    <Slider
-                      label="Effort"
-                      value={budget}
-                      min={1}
-                      max={20}
-                      step={1}
-                      suffix=" s"
-                      onChange={setBudget}
-                    />
-                    <button
-                      onClick={() => void runNest()}
-                      disabled={nesting}
-                      className="w-full rounded-md bg-cyan-400 px-4 py-2 text-sm font-medium text-neutral-950 transition hover:bg-cyan-300 disabled:opacity-50"
-                    >
-                      {nesting ? "Nesting…" : "Nest this sheet"}
-                    </button>
-                    <p className="text-xs text-neutral-600">
-                      The engine runs on this thread, so the page will sit still
-                      for the effort you asked for.
-                    </p>
-                  </div>
-                </section>
-              )}
+              <SheetSettingsPanel
+                sheet={sheet}
+                nesting={nestOptions}
+                onChange={setSheet}
+                onLoadPreset={(preset: Preset) => {
+                  setSheet(preset.sheet);
+                  setNestOptions(preset.nesting);
+                }}
+                pageSizeMm={{
+                  width: state.page.width * PT_TO_MM,
+                  height: state.page.height * PT_TO_MM,
+                }}
+              />
+
+              <NestSettingsPanel
+                nesting={nestOptions}
+                onChange={setNestOptions}
+                designCount={cutPaths.length}
+                busy={nesting}
+                onRun={() => void runNest()}
+              />
 
               {result && (
                 <section>
