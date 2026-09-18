@@ -8,6 +8,7 @@ import SheetSettingsPanel from "@/components/SheetSettingsPanel";
 import LayoutView from "@/components/LayoutView";
 import SheetView from "@/components/SheetView";
 import { nest, type NestResult } from "@/lib/engine";
+import { exportNestedPdf } from "@/lib/pdf/export";
 import {
   defaultNesting,
   defaultSheet,
@@ -34,6 +35,10 @@ type State =
       status: "ready";
       name: string;
       doc: PDFDocumentProxy;
+      /** Kept for export, which re-places the original bytes rather than
+          redrawing anything. pdf.js detaches what it is given, so this is a
+          copy. */
+      bytes: Uint8Array;
       page: PageGeometry;
       layers: LayerSummary[];
     };
@@ -56,10 +61,12 @@ export default function Home() {
   // showing numbers that quietly describe a different request.
   const [stale, setStale] = useState(false);
   const [view, setView] = useState<"source" | "layout">("source");
+  const [saving, setSaving] = useState(false);
 
   const open = useCallback(async (file: File) => {
     setState({ status: "reading", name: file.name });
     try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
       const doc = await loadPdf(file);
       const page = await extractPageGeometry(doc, 1);
       const layers = summariseLayers(page);
@@ -67,7 +74,7 @@ export default function Home() {
       setStale(false);
       setView("source");
       setCutLayer(guessCutLayer(layers));
-      setState({ status: "ready", name: file.name, doc, page, layers });
+      setState({ status: "ready", name: file.name, doc, bytes, page, layers });
     } catch (error) {
       setState({
         status: "failed",
@@ -160,6 +167,28 @@ export default function Home() {
       setNesting(false);
     }
   }, [cutPaths, sheet, nestOptions]);
+
+  const download = useCallback(async () => {
+    if (state.status !== "ready" || !result?.ok) return;
+    setSaving(true);
+    try {
+      const pdf = await exportNestedPdf({
+        sourceBytes: state.bytes,
+        result,
+        pathForDesign,
+        sheet,
+      });
+      const blob = new Blob([pdf as BlobPart], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = state.name.replace(/\.pdf$/i, "") + " nested.pdf";
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setSaving(false);
+    }
+  }, [state, result, pathForDesign, sheet]);
 
   // A preview wide enough to see the cut lines but not so wide it needs
   // scrolling on a laptop.
@@ -383,7 +412,23 @@ export default function Home() {
                         value={result.validation.ok ? "passed" : "FAILED"}
                       />
                     </dl>
-                  ) : (
+                  ) : null}
+                  {result.ok && result.validation.ok && (
+                    <button
+                      onClick={() => void download()}
+                      disabled={saving || stale}
+                      className="mt-3 w-full rounded-md border border-neutral-700 px-4 py-2 text-sm text-neutral-200 transition hover:border-neutral-500 disabled:opacity-40"
+                    >
+                      {saving ? "Writing…" : "Download PDF"}
+                    </button>
+                  )}
+                  {result.ok && !result.validation.ok && (
+                    <p className="mt-2 text-xs text-rose-400">
+                      The layout did not pass validation, so it cannot be
+                      exported.
+                    </p>
+                  )}
+                  {!result.ok && (
                     <p className="mt-2 text-xs text-rose-400">{result.error}</p>
                   )}
                 </section>
