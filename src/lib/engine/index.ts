@@ -76,29 +76,37 @@ export interface NestSettings {
   allowRotation: boolean;
 }
 
-interface EngineModule {
-  ccall: (
-    name: string,
-    returnType: string | null,
-    argTypes: string[],
-    args: unknown[]
-  ) => never | number | string;
-  UTF8ToString: (pointer: number) => string;
+import type { NestWorkerResponse } from "./worker";
+
+// One worker for the session. Starting it costs a WebAssembly compile, which is
+// worth paying once rather than on every press of the button.
+let worker: Worker | null = null;
+let nextRequestId = 1;
+
+function ensureWorker(): Worker {
+  if (!worker)
+    worker = new Worker(new URL("./worker.ts", import.meta.url), {
+      type: "module",
+    });
+  return worker;
 }
 
-let enginePromise: Promise<EngineModule> | null = null;
+function callEngine(payload: string): Promise<string> {
+  const instance = ensureWorker();
+  const id = nextRequestId++;
 
-async function engine(): Promise<EngineModule> {
-  if (!enginePromise) {
-    enginePromise = import("./nest-engine.js").then((mod) =>
-      (mod.default as (options: object) => Promise<EngineModule>)({
-        // The .wasm is served from public/ rather than resolved next to the
-        // glue, because bundlers move the glue and the .wasm apart.
-        locateFile: (path: string) => (path.endsWith(".wasm") ? "/nest-engine.wasm" : path),
-      })
-    );
-  }
-  return enginePromise;
+  return new Promise((resolve, reject) => {
+    const onMessage = (event: MessageEvent<NestWorkerResponse>) => {
+      // Replies are matched by id: a run the user abandoned by changing a
+      // setting and pressing again must not resolve the one they are waiting on.
+      if (event.data.id !== id) return;
+      instance.removeEventListener("message", onMessage);
+      if (event.data.error) reject(new Error(event.data.error));
+      else resolve(event.data.text!);
+    };
+    instance.addEventListener("message", onMessage);
+    instance.postMessage({ id, payload });
+  });
 }
 
 /** One extracted path, converted from PDF points into engine millimetres. */
@@ -120,8 +128,6 @@ export async function nest(
   sheet: SheetSpec,
   settings: NestSettings
 ): Promise<NestResult> {
-  const mod = await engine();
-
   const request = {
     sheet: {
       width: sheet.widthMm,
@@ -144,10 +150,5 @@ export async function nest(
     })),
   };
 
-  const pointer = mod.ccall("nest_run", "number", ["string"], [
-    JSON.stringify(request),
-  ]) as number;
-  const text = mod.UTF8ToString(pointer);
-  mod.ccall("nest_free", null, ["number"], [pointer]);
-  return JSON.parse(text) as NestResult;
+  return JSON.parse(await callEngine(JSON.stringify(request))) as NestResult;
 }

@@ -9,6 +9,7 @@ import LayerPicker from "@/components/LayerPicker";
 import LayoutView from "@/components/LayoutView";
 import Modal from "@/components/Modal";
 import NavBar from "@/components/NavBar";
+import NestProgress from "@/components/NestProgress";
 import NestSettingsPanel from "@/components/NestSettingsPanel";
 import SheetSettingsPanel from "@/components/SheetSettingsPanel";
 import SheetView from "@/components/SheetView";
@@ -66,6 +67,7 @@ export default function Home() {
   const [placedPerDesign, setPlacedPerDesign] = useState<number[] | null>(null);
 
   const [nesting, setNesting] = useState(false);
+  const [startedAt, setStartedAt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<NestResult | null>(null);
   const [pathForDesign, setPathForDesign] = useState(new Map<number, VectorPath>());
@@ -175,6 +177,7 @@ export default function Home() {
     }
 
     setNesting(true);
+    setStartedAt(performance.now());
     try {
       const nested = await nest(
         designs,
@@ -347,7 +350,13 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="flex justify-center">
+              <div className="relative flex justify-center">
+                {nesting && (
+                  <NestProgress
+                    startedAt={startedAt}
+                    budgetSeconds={nestOptions.effortSeconds}
+                  />
+                )}
                 {view === "layout" && result?.ok ? (
                   <LayoutView
                     result={result}

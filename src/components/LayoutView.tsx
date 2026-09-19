@@ -103,8 +103,15 @@ export default function LayoutView({
           strokeDasharray="6 4"
           vectorEffect="non-scaling-stroke"
         />
-        {placed.map((piece) => (
-          <g key={piece.key} transform={piece.transform}>
+        {placed.map((piece, order) => (
+          <g
+            key={piece.key}
+            transform={piece.transform}
+            className="sticker-in"
+            // Capped, or a sheet of two hundred would take half a minute to
+            // finish appearing.
+            style={{ animationDelay: `${Math.min(order * 18, 900)}ms` }}
+          >
             {preview ? (
               <use href={`#design-${piece.designIndex}-art`} />
             ) : (
