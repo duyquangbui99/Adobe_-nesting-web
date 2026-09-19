@@ -52,6 +52,8 @@ export interface NestResult {
     requested: number;
     worstPenetrationMm: number;
     worstOverrunMm: number;
+    /** Pairs the grid actually compared, far below the square of the count. */
+    pairsTested: number;
     violations: NestViolation[];
   };
 }

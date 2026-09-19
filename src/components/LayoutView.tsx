@@ -104,28 +104,34 @@ export default function LayoutView({
           vectorEffect="non-scaling-stroke"
         />
         {placed.map((piece, order) => (
-          <g
-            key={piece.key}
-            transform={piece.transform}
-            className="sticker-in"
-            // Capped, or a sheet of two hundred would take half a minute to
-            // finish appearing.
-            style={{ animationDelay: `${Math.min(order * 18, 900)}ms` }}
-          >
-            {preview ? (
-              <use href={`#design-${piece.designIndex}-art`} />
-            ) : (
-              <path d={piece.outline} fill="#bfdbfe" fillOpacity={0.75} />
-            )}
-            {/* The cut line, drawn over the artwork, because it is the thing
-                being laid out and the thing a cutter will follow. */}
-            <path
-              d={piece.outline}
-              fill="none"
-              stroke="#e0218a"
-              strokeWidth={0.75}
-              vectorEffect="non-scaling-stroke"
-            />
+          // Two groups, and they must stay two. The outer one carries the
+          // placement, whose rotate() has to pivot about the page origin
+          // because that is what the engine's coordinates mean. The animation
+          // sets transform-origin to the shape's own centre, and putting both
+          // on one element made every rotated sticker spin about itself and
+          // land somewhere else entirely.
+          <g key={piece.key} transform={piece.transform}>
+            <g
+              className="sticker-in"
+              // Capped, or a sheet of two hundred would take half a minute to
+              // finish appearing.
+              style={{ animationDelay: `${Math.min(order * 18, 900)}ms` }}
+            >
+              {preview ? (
+                <use href={`#design-${piece.designIndex}-art`} />
+              ) : (
+                <path d={piece.outline} fill="#bfdbfe" fillOpacity={0.75} />
+              )}
+              {/* The cut line, drawn over the artwork, because it is the thing
+                  being laid out and the thing a cutter will follow. */}
+              <path
+                d={piece.outline}
+                fill="none"
+                stroke="#e0218a"
+                strokeWidth={0.75}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
           </g>
         ))}
       </g>
