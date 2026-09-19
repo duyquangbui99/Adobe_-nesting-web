@@ -42,6 +42,3 @@ next-env.d.ts
 
 # Sample artwork kept locally for testing
 samples/
-
-# Copied in by npm scripts, not source
-public/pdf.worker.mjs

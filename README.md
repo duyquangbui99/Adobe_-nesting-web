@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Sticker Nest
 
-## Getting Started
+Re-nests a print-and-cut PDF in the browser and writes back a sheet a cutter can
+use. Reads the cut contours out of the file, packs them with the same C++ engine
+the Illustrator plugin uses, compiled to WebAssembly, and exports a PDF that
+Illustrator opens with the artwork, the cut layer and the registration marks
+intact.
 
-First, run the development server:
+Nothing is uploaded. The PDF is read, nested and written entirely in the tab, so
+a customer's artwork never leaves their machine.
 
-```bash
+## Running it
+
+```sh
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000 and drop a PDF on it.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`npm run inspect -- file.pdf` runs the same extractor outside the browser, which
+is the quickest way to see what a file actually contains.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Deploying
 
-## Learn More
+There is no backend. Every part of it runs in the browser, so the whole thing is
+static and needs no environment variables, no database and no serverless
+functions.
 
-To learn more about Next.js, take a look at the following resources:
+On Vercel: import the repository, accept the detected Next.js settings, deploy.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Two files are committed rather than generated, and both need to stay that way:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `public/nest-engine.wasm` and `src/lib/engine/nest-engine.js` are the compiled
+  engine. Committing them means nobody working on the web app needs a C++
+  toolchain. Rebuilding them is the only thing that does.
+- `public/pdf.worker.mjs` is pdf.js's worker, copied out of `node_modules` by the
+  `postinstall` script. It is committed as well so a deploy does not depend on
+  that script having run.
 
-## Deploy on Vercel
+## Rebuilding the engine
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Only needed when the C++ in the sibling `adobe-plugin` repository changes. It is
+the one step that needs [Emscripten](https://emscripten.org).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```sh
+cd ../adobe-plugin
+emcmake cmake --preset wasm && cmake --build --preset wasm
+cp build/wasm/wasm/nest-engine.js  ../Adobe-web/src/lib/engine/
+cp build/wasm/wasm/nest-engine.wasm ../Adobe-web/src/lib/engine/
+cp build/wasm/wasm/nest-engine.wasm ../Adobe-web/public/
+```
+
+## Known gaps
+
+- One sheet only. The engine handles several; the interface pins it to one, so
+  an order larger than a sheet reports pieces unplaced instead of starting a
+  second page.
+- The engine runs on the main thread, so the tab sits still for the length of
+  the effort budget. A worker is the fix.
+- A source file with no registration marks exports without them, and the result
+  cannot be aligned in a cutter. The result panel says so.
