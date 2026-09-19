@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import { extractPageGeometry } from "../src/lib/pdf/extract.js";
 import { exportNestedPdf } from "../src/lib/pdf/export.js";
+import { findRegistrationMarks } from "../src/lib/pdf/marks.js";
 import { guessCutLayer, looksLikeCutLine, summariseLayers, PT_TO_MM } from "../src/lib/pdf/geometry.js";
 import { defaultSheet } from "../src/lib/settings.js";
 import type { NestResult } from "../src/lib/engine/index.js";
@@ -70,6 +71,8 @@ result.designs.forEach((d, i) => {
 console.log(`asked for ${designs.reduce((n, d) => n + d.quantity, 0)}, placed ${result.placements.length}`);
 console.log(`utilization ${(result.utilization * 100).toFixed(1)} %, validation ${result.validation.ok ? "passed" : "FAILED"}`);
 
-const pdf = await exportNestedPdf({ sourceBytes: bytes, result, pathForDesign, sheet });
+const marks = findRegistrationMarks(page);
+console.log(marks ? `registration marks ${marks.sizeMm.toFixed(1)} mm at ${marks.insetXMm.toFixed(0)} mm inset` : "no registration marks");
+const pdf = await exportNestedPdf({ sourceBytes: bytes, result, pathForDesign, sheet, marks });
 writeFileSync(out, pdf);
 console.log(`wrote ${out}, ${(pdf.length / 1024).toFixed(0)} KB`);

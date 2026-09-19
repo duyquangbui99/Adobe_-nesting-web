@@ -1,50 +1,85 @@
-// Writes the nested layout back out as a PDF that Illustrator opens.
+// Writes the nested layout back out as a PDF a cutter can actually use.
 //
-// Nothing is redrawn. The original page is embedded once as a form, and each
-// sticker is that same form drawn again with a clip set to its cut contour and
-// a transform putting it where the engine asked. Vectors, raster images, spot
-// colours and overprint all survive, because none of them are ever
-// reinterpreted: the bytes that described them are simply referenced again.
+// Three things go onto the page, and only the first is about looking right.
 //
-// Redrawing from the extracted geometry would have been easier and would have
-// thrown away every image on the sheet and every colour space the extractor
-// does not understand.
+// The artwork: the source page embedded once as a form, drawn again per
+// sticker, clipped to that sticker's cut contour and transformed into place.
+// Nothing is redrawn, so vectors, raster images, spot colours and overprint all
+// survive, because none of them are reinterpreted.
+//
+// The cut contours: the same outlines as unfilled stroked paths on a layer of
+// their own, stroked in a spot colour named CutContour. Without these the sheet
+// prints and cannot be cut: a RIP finds the blade path by that name. They are
+// drawn separately rather than relied upon from inside the clip, where only the
+// inner half of the stroke survives and nothing can isolate them.
+//
+// The registration marks: redrawn at the corners of the new sheet, at the size
+// and inset the source used. Without them the cutter cannot find the sheet.
 
 import {
   PDFDocument,
+  PDFName,
+  PDFOperator,
+  PDFOperatorNames,
+  PDFString,
+  appendBezierCurve,
   clip,
   closePath,
   concatTransformationMatrix,
   drawObject,
   endPath,
+  fill,
   moveTo,
   popGraphicsState,
   pushGraphicsState,
-  appendBezierCurve,
+  setLineWidth,
+  stroke,
 } from "pdf-lib";
+import type { PDFDict, PDFPage, PDFRef } from "pdf-lib";
 
 import type { VectorPath } from "./extract";
+import type { RegistrationMarks } from "./marks";
 import type { NestPlacement, NestResult } from "@/lib/engine";
 import type { SheetSettings } from "@/lib/settings";
 
 const MM_TO_PT = 72 / 25.4;
 
-/** The cut contour as PDF path operators, in the source page's coordinates. */
-function clipOperators(path: VectorPath) {
-  const operators = [moveTo(path.start.x, path.start.y)];
-  for (const segment of path.segments)
+/** A path as PDF operators, in whatever space the current transform defines. */
+function pathOperators(path: VectorPath, dx = 0, dy = 0) {
+  const operators = [moveTo(path.start.x + dx, path.start.y + dy)];
+  for (const s of path.segments)
     operators.push(
-      appendBezierCurve(
-        segment.c1.x,
-        segment.c1.y,
-        segment.c2.x,
-        segment.c2.y,
-        segment.end.x,
-        segment.end.y
-      )
+      appendBezierCurve(s.c1.x + dx, s.c1.y + dy, s.c2.x + dx, s.c2.y + dy, s.end.x + dx, s.end.y + dy)
     );
   operators.push(closePath());
   return operators;
+}
+
+function beginLayer(property: string) {
+  return PDFOperator.of(PDFOperatorNames.BeginMarkedContentSequence, [
+    PDFName.of("OC"),
+    PDFName.of(property),
+  ]);
+}
+
+const endLayer = () => PDFOperator.of(PDFOperatorNames.EndMarkedContent);
+
+function setStrokeSpot(colorSpace: string, tint: number) {
+  return [
+    PDFOperator.of(PDFOperatorNames.StrokingColorspace, [PDFName.of(colorSpace)]),
+    PDFOperator.of(PDFOperatorNames.StrokingColorN, [String(tint)]),
+  ];
+}
+
+/** Adds a key to a page's Resources sub-dictionary, creating it if needed. */
+function addResource(page: PDFPage, category: string, key: string, value: PDFRef) {
+  const resources = page.node.Resources()!;
+  let bucket = resources.lookup(PDFName.of(category)) as PDFDict | undefined;
+  if (!bucket) {
+    bucket = page.doc.context.obj({}) as PDFDict;
+    resources.set(PDFName.of(category), bucket);
+  }
+  bucket.set(PDFName.of(key), value);
 }
 
 export interface ExportOptions {
@@ -52,6 +87,8 @@ export interface ExportOptions {
   result: NestResult;
   pathForDesign: Map<number, VectorPath>;
   sheet: SheetSettings;
+  /** Redrawn on the output sheet. Omitted when the source had none. */
+  marks: RegistrationMarks | null;
 }
 
 export async function exportNestedPdf({
@@ -59,9 +96,32 @@ export async function exportNestedPdf({
   result,
   pathForDesign,
   sheet,
+  marks,
 }: ExportOptions): Promise<Uint8Array> {
   const out = await PDFDocument.create();
   const [embedded] = await out.embedPdf(sourceBytes, [0]);
+  const context = out.context;
+
+  // Layers, so a RIP or an operator can isolate the cut from the print.
+  const layerRefs: Record<string, PDFRef> = {};
+  for (const name of ["Print", "CutContour", "Registration"])
+    layerRefs[name] = context.register(
+      context.obj({ Type: "OCG", Name: PDFString.of(name) })
+    );
+  const allLayers = Object.values(layerRefs);
+  out.catalog.set(
+    PDFName.of("OCProperties"),
+    context.obj({ OCGs: allLayers, D: { ON: allLayers, Order: allLayers } })
+  );
+
+  // A Separation called CutContour, which is how every print-and-cut RIP finds
+  // the blade path. The tint transform paints it magenta so a human can see it.
+  const cutTint = context.register(
+    context.obj({ FunctionType: 2, Domain: [0, 1], C0: [0, 0, 0, 0], C1: [0, 1, 0, 0], N: 1 })
+  );
+  const cutSpace = context.register(
+    context.obj([PDFName.of("Separation"), PDFName.of("CutContour"), PDFName.of("DeviceCMYK"), cutTint])
+  );
 
   const widthPt = sheet.widthMm * MM_TO_PT;
   const heightPt = sheet.heightMm * MM_TO_PT;
@@ -75,36 +135,79 @@ export async function exportNestedPdf({
 
   for (const sheetIndex of [...bySheet.keys()].sort((a, b) => a - b)) {
     const page = out.addPage([widthPt, heightPt]);
-    // One XObject entry per page, reused by every sticker on it.
-    const name = page.node.newXObject("Sticker", embedded.ref);
+    const artwork = page.node.newXObject("Sticker", embedded.ref);
+    addResource(page, "ColorSpace", "CutCS", cutSpace);
+    for (const [name, ref] of Object.entries(layerRefs))
+      addResource(page, "Properties", name, ref);
 
-    for (const placement of bySheet.get(sheetIndex)!) {
+    const placements = bySheet.get(sheetIndex)!;
+
+    // Artwork first, so the cut lines and marks draw over it.
+    page.pushOperators(beginLayer("Print"));
+    for (const placement of placements) {
       const path = pathForDesign.get(placement.designIndex);
       if (!path) continue;
-
       const radians = (placement.rotationDeg * Math.PI) / 180;
       const cos = Math.cos(radians);
       const sin = Math.sin(radians);
-
       page.pushOperators(
         pushGraphicsState(),
-        // Rotate about the page origin, then move, which is the transform the
-        // engine's placement describes. The clip below is given in the source
-        // page's own coordinates and is carried along by this.
-        concatTransformationMatrix(
-          cos,
-          sin,
-          -sin,
-          cos,
-          placement.x * MM_TO_PT,
-          placement.y * MM_TO_PT
-        ),
-        ...clipOperators(path),
+        // Rotate about the page origin, then move. The clip below is given in
+        // the source page's own coordinates and is carried along by this.
+        concatTransformationMatrix(cos, sin, -sin, cos, placement.x * MM_TO_PT, placement.y * MM_TO_PT),
+        ...pathOperators(path),
         clip(),
         endPath(),
-        drawObject(name),
+        drawObject(artwork),
         popGraphicsState()
       );
+    }
+    page.pushOperators(endLayer());
+
+    page.pushOperators(beginLayer("CutContour"));
+    for (const placement of placements) {
+      const path = pathForDesign.get(placement.designIndex);
+      if (!path) continue;
+      const radians = (placement.rotationDeg * Math.PI) / 180;
+      const cos = Math.cos(radians);
+      const sin = Math.sin(radians);
+      page.pushOperators(
+        pushGraphicsState(),
+        concatTransformationMatrix(cos, sin, -sin, cos, placement.x * MM_TO_PT, placement.y * MM_TO_PT),
+        ...setStrokeSpot("CutCS", 1),
+        // A quarter point. The blade follows the path's centre, so the weight
+        // is only there to be seen.
+        setLineWidth(0.25),
+        ...pathOperators(path),
+        stroke(),
+        popGraphicsState()
+      );
+    }
+    page.pushOperators(endLayer());
+
+    if (marks) {
+      page.pushOperators(beginLayer("Registration"));
+      const insetX = marks.insetXMm * MM_TO_PT;
+      const insetY = marks.insetYMm * MM_TO_PT;
+      const source = {
+        x: (marks.shape.bounds.minX + marks.shape.bounds.maxX) / 2,
+        y: (marks.shape.bounds.minY + marks.shape.bounds.maxY) / 2,
+      };
+      const corners = [
+        { x: insetX, y: insetY },
+        { x: widthPt - insetX, y: insetY },
+        { x: insetX, y: heightPt - insetY },
+        { x: widthPt - insetX, y: heightPt - insetY },
+      ];
+      for (const corner of corners)
+        page.pushOperators(
+          pushGraphicsState(),
+          PDFOperator.of(PDFOperatorNames.NonStrokingColorCmyk, ["0", "0", "0", "1"]),
+          ...pathOperators(marks.shape, corner.x - source.x, corner.y - source.y),
+          fill(),
+          popGraphicsState()
+        );
+      page.pushOperators(endLayer());
     }
   }
 

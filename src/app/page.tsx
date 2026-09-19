@@ -10,6 +10,7 @@ import LayoutView from "@/components/LayoutView";
 import SheetView from "@/components/SheetView";
 import { nest, type NestResult } from "@/lib/engine";
 import { exportNestedPdf } from "@/lib/pdf/export";
+import { findRegistrationMarks } from "@/lib/pdf/marks";
 import {
   defaultNesting,
   defaultSheet,
@@ -234,6 +235,7 @@ export default function Home() {
         result,
         pathForDesign,
         sheet,
+        marks: findRegistrationMarks(state.page),
       });
       const blob = new Blob([pdf as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
