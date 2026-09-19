@@ -140,7 +140,10 @@ function DesignRow({
         min={0}
         value={quantity}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-16 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-right text-sm tabular-nums text-neutral-100 focus:border-cyan-400 focus:outline-none"
+        // The spinners are too small to hit and too easy to hit by accident
+        // while scrolling the list. Typing is the only sensible way to set a
+        // quantity anyway.
+        className="w-16 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-right text-sm tabular-nums text-neutral-100 [appearance:textfield] focus:border-cyan-400 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
     </li>
   );
