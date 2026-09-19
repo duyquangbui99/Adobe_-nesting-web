@@ -1,6 +1,6 @@
 "use client";
 
-import { Choice, NumberField, Section, Toggle } from "./Field";
+import { Choice, Section, Toggle } from "./Field";
 import {
   ROTATION_STEPS,
   rotationCount,
@@ -10,8 +10,8 @@ import {
 interface Props {
   nesting: NestingSettings;
   onChange: (nesting: NestingSettings) => void;
-  /** How many cut contours the chosen layer holds. */
-  designCount: number;
+  /** How many pieces the quantities add up to. */
+  pieceCount: number;
   busy: boolean;
   onRun: () => void;
 }
@@ -19,7 +19,7 @@ interface Props {
 export default function NestSettingsPanel({
   nesting,
   onChange,
-  designCount,
+  pieceCount,
   busy,
   onRun,
 }: Props) {
@@ -29,20 +29,11 @@ export default function NestSettingsPanel({
   return (
     <Section title="Nesting">
       <Toggle
-        label="Fill the sheet"
+        label="Repeat to fill the sheet"
         checked={nesting.fillSheet}
         onChange={(v) => set({ fillSheet: v })}
-        hint="Place as many copies as fit, instead of a fixed quantity."
+        hint="Keep laying down the quantities below, in proportion, until nothing more fits."
       />
-
-      {!nesting.fillSheet && (
-        <NumberField
-          label="Copies of each"
-          value={nesting.quantity}
-          min={1}
-          onChange={(v) => set({ quantity: Math.max(1, Math.round(v)) })}
-        />
-      )}
 
       <div className="h-px bg-neutral-800" />
 
@@ -97,14 +88,16 @@ export default function NestSettingsPanel({
 
       <button
         onClick={onRun}
-        disabled={busy || designCount === 0}
+        disabled={busy || pieceCount === 0}
         className="w-full rounded-md bg-cyan-400 px-4 py-2 text-sm font-medium text-neutral-950 transition hover:bg-cyan-300 disabled:opacity-40"
       >
         {busy
           ? "Nesting…"
-          : designCount === 0
-            ? "No cut contours on this layer"
-            : `Nest ${designCount} shape${designCount === 1 ? "" : "s"}`}
+          : pieceCount === 0
+            ? "Nothing to nest"
+            : nesting.fillSheet
+              ? "Fill the sheet"
+              : `Nest ${pieceCount} piece${pieceCount === 1 ? "" : "s"}`}
       </button>
 
       {/*

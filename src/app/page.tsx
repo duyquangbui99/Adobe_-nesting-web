@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
+import DesignList from "@/components/DesignList";
 import NestSettingsPanel from "@/components/NestSettingsPanel";
 import SheetSettingsPanel from "@/components/SheetSettingsPanel";
 import LayoutView from "@/components/LayoutView";
@@ -19,6 +20,7 @@ import {
 } from "@/lib/settings";
 import { extractPageGeometry, type PageGeometry } from "@/lib/pdf/extract";
 import { loadPdf } from "@/lib/pdf/load";
+import { Section } from "@/components/Field";
 import {
   guessCutLayer,
   looksLikeCutLine,
@@ -62,6 +64,13 @@ export default function Home() {
   const [stale, setStale] = useState(false);
   const [view, setView] = useState<"source" | "layout">("source");
   const [saving, setSaving] = useState(false);
+  // One quantity per cut contour on the chosen layer, which is how an order
+  // actually arrives: five of this, ten of that.
+  const [quantities, setQuantities] = useState<number[]>([]);
+  const [quantityKey, setQuantityKey] = useState("");
+  // How many of each design actually went down, so a row can show that it fell
+  // short rather than leaving the user to compare two totals.
+  const [placedPerDesign, setPlacedPerDesign] = useState<number[] | null>(null);
 
   const open = useCallback(async (file: File) => {
     setState({ status: "reading", name: file.name });
@@ -103,30 +112,66 @@ export default function Home() {
     [state, cutLayer]
   );
 
+  // A different layer means different shapes, so the quantities start again.
+  // Adjusted during render rather than in an effect: React re-renders before
+  // committing, so the list never paints with quantities belonging to the
+  // layer that was showing a moment ago.
+  const shapesKey = `${cutLayer ?? ""}:${cutPaths.length}`;
+  if (shapesKey !== quantityKey) {
+    setQuantityKey(shapesKey);
+    setQuantities(cutPaths.map(() => 1));
+    setPlacedPerDesign(null);
+    setResult(null);
+    setStale(false);
+    setView("source");
+  }
+
+  const requestedTotal = useMemo(
+    () => quantities.reduce((sum, n) => sum + n, 0),
+    [quantities]
+  );
+
   const runNest = useCallback(async () => {
-    if (!cutPaths.length) return;
+    if (!cutPaths.length || requestedTotal === 0) return;
 
     const usableMm2 =
       (sheet.widthMm - sheet.marginLeftMm - sheet.marginRightMm) *
       (sheet.heightMm - sheet.marginTopMm - sheet.marginBottomMm);
 
-    const designs = cutPaths.map((path, index) => {
-      // Filling the sheet is a quantity the engine never reaches rather than a
-      // mode it has: ask for as many as could possibly fit and let it report
-      // what did not. Bounded by the bounding box, so the ask stays sane.
-      const areaMm2 =
-        (path.bounds.maxX - path.bounds.minX) *
-        PT_TO_MM *
-        ((path.bounds.maxY - path.bounds.minY) * PT_TO_MM);
-      const couldFit = areaMm2 > 0 ? Math.floor(usableMm2 / areaMm2) + 2 : 1;
-      return {
+    // Filling the sheet is not a mode the engine has: it is asking for more
+    // than can fit and letting it report what did not. Multiplying every
+    // quantity by the same factor keeps the mix the order asked for, so five
+    // of one and ten of another stays one to two however many times it repeats.
+    let repeat = 1;
+    if (nestOptions.fillSheet) {
+      const mixAreaMm2 = cutPaths.reduce((sum, path, index) => {
+        const areaMm2 =
+          (path.bounds.maxX - path.bounds.minX) *
+          PT_TO_MM *
+          ((path.bounds.maxY - path.bounds.minY) * PT_TO_MM);
+        return sum + areaMm2 * (quantities[index] ?? 0);
+      }, 0);
+      if (mixAreaMm2 > 0)
+        repeat = Math.max(1, Math.ceil((usableMm2 / mixAreaMm2) * 1.4));
+    }
+
+    const designs = cutPaths
+      .map((path, index) => ({
         id: `cut-${index}`,
         paths: [path],
-        quantity: nestOptions.fillSheet
-          ? Math.min(couldFit, 400)
-          : nestOptions.quantity,
-      };
-    });
+        quantity: (quantities[index] ?? 0) * repeat,
+        sourceIndex: index,
+      }))
+      .filter((design) => design.quantity > 0);
+
+    // Asking for more than a few hundred makes the search spend its whole
+    // budget on pieces that were never going to fit.
+    const asked = designs.reduce((sum, d) => sum + d.quantity, 0);
+    if (asked > 600) {
+      const scale = 600 / asked;
+      for (const design of designs)
+        design.quantity = Math.max(1, Math.floor(design.quantity * scale));
+    }
 
     setNesting(true);
     try {
@@ -154,10 +199,22 @@ export default function Home() {
       // The engine drops any design whose paths produced no outline, so its
       // indices are not ours. Its own report carries the mapping.
       const mapping = new Map<number, (typeof cutPaths)[number]>();
-      nested.designs?.forEach((design, index) => {
-        if (design.designIndex >= 0 && cutPaths[index])
-          mapping.set(design.designIndex, cutPaths[index]);
+      nested.designs?.forEach((report, index) => {
+        const source = designs[index]?.sourceIndex;
+        if (report.designIndex >= 0 && source !== undefined)
+          mapping.set(report.designIndex, cutPaths[source]);
       });
+
+      // Counted back against the rows the user typed into, not the engine's
+      // own indices, and divided by the repeat so "placed" compares with what
+      // was asked for rather than with what filling multiplied it to.
+      const perDesign = cutPaths.map(() => 0);
+      for (const placement of nested.placements ?? []) {
+        const path = mapping.get(placement.designIndex);
+        const row = path ? cutPaths.indexOf(path) : -1;
+        if (row >= 0) perDesign[row] += 1;
+      }
+      setPlacedPerDesign(perDesign);
 
       setPathForDesign(mapping);
       setResult(nested);
@@ -166,7 +223,7 @@ export default function Home() {
     } finally {
       setNesting(false);
     }
-  }, [cutPaths, sheet, nestOptions]);
+  }, [cutPaths, sheet, nestOptions, quantities, requestedTotal]);
 
   const download = useCallback(async () => {
     if (state.status !== "ready" || !result?.ok) return;
@@ -377,13 +434,27 @@ export default function Home() {
                 }}
               />
 
+              {cutLayer !== null && cutPaths.length > 0 && (
+                <Section title="Quantities">
+                  <DesignList
+                    designs={cutPaths}
+                    quantities={quantities}
+                    onChange={(next) => {
+                      setQuantities(next);
+                      if (result) setStale(true);
+                    }}
+                    placedPerDesign={placedPerDesign}
+                  />
+                </Section>
+              )}
+
               <NestSettingsPanel
                 nesting={nestOptions}
                 onChange={(next) => {
                   setNestOptions(next);
                   if (result) setStale(true);
                 }}
-                designCount={cutPaths.length}
+                pieceCount={requestedTotal}
                 busy={nesting}
                 onRun={() => void runNest()}
               />
