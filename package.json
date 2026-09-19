@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "inspect": "tsx scripts/inspect-pdf.mts",
-    "sync:worker": "cp node_modules/pdfjs-dist/build/pdf.worker.mjs public/",
+    "sync:worker": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.mjs",
     "postinstall": "npm run sync:worker"
   },
   "dependencies": {

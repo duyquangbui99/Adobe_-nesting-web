@@ -51,6 +51,22 @@ cp build/wasm/wasm/nest-engine.wasm ../Adobe-web/src/lib/engine/
 cp build/wasm/wasm/nest-engine.wasm ../Adobe-web/public/
 ```
 
+## What it depends on
+
+Where the user is does not matter. Nothing is uploaded and nothing is computed
+on a server, so there is no round trip to be slow. A first visit downloads about
+three megabytes of static files from whichever edge is nearest, and after that
+it is cached.
+
+What does matter is the machine it runs on. The engine works to a time budget,
+so a slower computer returns a worse layout in the same time rather than the
+same layout more slowly, which is the right way round but worth knowing.
+
+The WebAssembly build is single threaded. Threads in the browser need
+SharedArrayBuffer, which needs cross-origin isolation headers, which would
+complicate the deploy for a gain nobody has measured yet. The Illustrator plugin
+uses every core; this does not, so the same budget buys a rougher answer here.
+
 ## Known gaps
 
 - One sheet only. The engine handles several; the interface pins it to one, so
