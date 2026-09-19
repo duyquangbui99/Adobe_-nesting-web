@@ -231,12 +231,25 @@ export default function Home() {
     if (state.status !== "ready" || !result?.ok) return;
     setSaving(true);
     try {
+      // The source's cut layer has to be switched off in the export or it
+      // prints: our clip runs along the same path, so half of the shop's own
+      // stroke survives inside every sticker. The marks layer goes too, but
+      // only when it holds the marks and nothing else, since we redraw those.
+      const marks = findRegistrationMarks(state.page);
+      const marksLayer = marks?.shape.layer ?? null;
+      const onMarksLayer = state.page.paths.filter((p) => p.layer === marksLayer).length;
+      const hiddenLayers = [
+        cutLayer,
+        marksLayer !== null && onMarksLayer === marks!.found ? marksLayer : null,
+      ].filter((name): name is string => name !== null);
+
       const pdf = await exportNestedPdf({
         sourceBytes: state.bytes,
         result,
         pathForDesign,
         sheet,
-        marks: findRegistrationMarks(state.page),
+        marks,
+        hiddenLayers,
       });
       const blob = new Blob([pdf as BlobPart], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
@@ -248,7 +261,7 @@ export default function Home() {
     } finally {
       setSaving(false);
     }
-  }, [state, result, pathForDesign, sheet]);
+  }, [state, result, pathForDesign, sheet, cutLayer]);
 
   // An object URL is a handle the browser holds open; letting them accumulate
   // across a session of opening files is a leak.

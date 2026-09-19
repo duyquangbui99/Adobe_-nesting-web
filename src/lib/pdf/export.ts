@@ -15,9 +15,14 @@
 //
 // The registration marks: redrawn at the corners of the new sheet, at the size
 // and inset the source used. Without them the cutter cannot find the sheet.
+//
+// And the source's own layers, which come along inside the embedded form. The
+// two we replace have to be switched off by name, or they print. See below.
 
 import {
+  PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
   PDFOperator,
   PDFOperatorNames,
@@ -35,7 +40,7 @@ import {
   setLineWidth,
   stroke,
 } from "pdf-lib";
-import type { PDFDict, PDFPage, PDFRef } from "pdf-lib";
+import type { PDFPage, PDFRef } from "pdf-lib";
 
 import type { VectorPath } from "./extract";
 import type { RegistrationMarks } from "./marks";
@@ -89,6 +94,12 @@ export interface ExportOptions {
   sheet: SheetSettings;
   /** Redrawn on the output sheet. Omitted when the source had none. */
   marks: RegistrationMarks | null;
+  /**
+   * Names of the source's own layers to switch off, because this file draws
+   * their content itself. The cut layer belongs here; without it the shop's
+   * cut line prints.
+   */
+  hiddenLayers?: string[];
 }
 
 export async function exportNestedPdf({
@@ -97,6 +108,7 @@ export async function exportNestedPdf({
   pathForDesign,
   sheet,
   marks,
+  hiddenLayers = [],
 }: ExportOptions): Promise<Uint8Array> {
   const out = await PDFDocument.create();
   const [embedded] = await out.embedPdf(sourceBytes, [0]);
@@ -109,10 +121,6 @@ export async function exportNestedPdf({
       context.obj({ Type: "OCG", Name: PDFString.of(name) })
     );
   const allLayers = Object.values(layerRefs);
-  out.catalog.set(
-    PDFName.of("OCProperties"),
-    context.obj({ OCGs: allLayers, D: { ON: allLayers, Order: allLayers } })
-  );
 
   // A Separation called CutContour, which is how every print-and-cut RIP finds
   // the blade path. The tint transform paints it magenta so a human can see it.
@@ -210,6 +218,43 @@ export async function exportNestedPdf({
       page.pushOperators(endLayer());
     }
   }
+
+  // The source's layers arrive inside the embedded form, and an optional
+  // content group that no configuration mentions is visible by default. For the
+  // cut layer that is not cosmetic: its stroke sits exactly under our clip, so
+  // the inner half of it survives on every single sticker and prints as a rim
+  // the blade then leaves behind. The fix is to name the source's groups and
+  // switch off the ones this file already draws for itself.
+  await out.flush(); // The embedded page's objects only reach us on a flush.
+  const ours = new Set(allLayers.map((ref) => ref.objectNumber));
+  const wanted = new Set(hiddenLayers);
+  const sourceLayers: PDFRef[] = [];
+  const suppressed: PDFRef[] = [];
+  for (const [ref, object] of context.enumerateIndirectObjects()) {
+    if (ours.has(ref.objectNumber)) continue;
+    if (!(object instanceof PDFDict)) continue;
+    if (object.lookup(PDFName.of("Type")) !== PDFName.of("OCG")) continue;
+    sourceLayers.push(ref);
+    const name = object.lookup(PDFName.of("Name"));
+    const label =
+      name instanceof PDFHexString || name instanceof PDFString ? name.decodeText() : null;
+    if (label !== null && wanted.has(label)) suppressed.push(ref);
+  }
+
+  const off = new Set(suppressed.map((ref) => ref.objectNumber));
+  out.catalog.set(
+    PDFName.of("OCProperties"),
+    context.obj({
+      OCGs: [...allLayers, ...sourceLayers],
+      D: {
+        ON: [...allLayers, ...sourceLayers.filter((ref) => !off.has(ref.objectNumber))],
+        OFF: suppressed,
+        // Only ours are ordered, so the layer panel shows the three that mean
+        // something here and not the source's.
+        Order: allLayers,
+      },
+    })
+  );
 
   return out.save();
 }
