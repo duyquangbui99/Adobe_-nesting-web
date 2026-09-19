@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import DesignList from "@/components/DesignList";
@@ -17,6 +17,7 @@ import { extractPageGeometry, type PageGeometry, type VectorPath } from "@/lib/p
 import { exportNestedPdf } from "@/lib/pdf/export";
 import { findRegistrationMarks } from "@/lib/pdf/marks";
 import { loadPdf } from "@/lib/pdf/load";
+import { renderPagePreview, type PagePreview } from "@/lib/pdf/preview";
 import {
   guessCutLayer,
   looksLikeCutLine,
@@ -71,6 +72,10 @@ export default function Home() {
   const [stale, setStale] = useState(false);
   const [view, setView] = useState<"source" | "layout">("source");
 
+  // The source page rendered once, so every sticker can be shown as its
+  // artwork rather than as an outline.
+  const [preview, setPreview] = useState<PagePreview | null>(null);
+
   const [sheetOpen, setSheetOpen] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
 
@@ -86,6 +91,13 @@ export default function Home() {
       setView("source");
       setCutLayer(guessCutLayer(layers));
       setState({ status: "ready", name: file.name, doc, bytes, page, layers });
+
+      // Rendering is slow enough to be worth doing after the page is usable,
+      // and the previews fall back to outlines until it lands.
+      setPreview(null);
+      void renderPagePreview(doc, 1)
+        .then(setPreview)
+        .catch(() => setPreview(null));
     } catch (error) {
       setState({
         status: "failed",
@@ -235,6 +247,14 @@ export default function Home() {
     }
   }, [state, result, pathForDesign, sheet]);
 
+  // An object URL is a handle the browser holds open; letting them accumulate
+  // across a session of opening files is a leak.
+  useEffect(() => {
+    return () => {
+      if (preview) URL.revokeObjectURL(preview.url);
+    };
+  }, [preview]);
+
   const sourceScale = useMemo(() => {
     if (state.status !== "ready") return 1;
     return Math.min(640 / state.page.width, 720 / state.page.height);
@@ -333,6 +353,7 @@ export default function Home() {
                     result={result}
                     pathForDesign={pathForDesign}
                     sheet={sheet}
+                    preview={preview}
                     scale={layoutScale}
                   />
                 ) : (
@@ -358,6 +379,7 @@ export default function Home() {
                       if (result) setStale(true);
                     }}
                     placedPerDesign={placedPerDesign}
+                    preview={preview}
                   />
                 </Section>
               ) : (

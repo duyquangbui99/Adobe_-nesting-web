@@ -3,7 +3,9 @@
 import { useMemo } from "react";
 
 import type { VectorPath } from "@/lib/pdf/extract";
-import { toSvgPath, PT_TO_MM } from "@/lib/pdf/geometry";
+import { PT_TO_MM } from "@/lib/pdf/geometry";
+import type { PagePreview } from "@/lib/pdf/preview";
+import { StickerClip } from "./StickerImage";
 
 interface Props {
   designs: VectorPath[];
@@ -11,6 +13,8 @@ interface Props {
   onChange: (quantities: number[]) => void;
   /** How many of each were actually placed, once a nest has run. */
   placedPerDesign: number[] | null;
+  /** The source page, so a row shows the sticker rather than its outline. */
+  preview: PagePreview | null;
 }
 
 export default function DesignList({
@@ -18,6 +22,7 @@ export default function DesignList({
   quantities,
   onChange,
   placedPerDesign,
+  preview,
 }: Props) {
   const total = quantities.reduce((sum, n) => sum + n, 0);
 
@@ -51,7 +56,9 @@ export default function DesignList({
         {designs.map((design, index) => (
           <DesignRow
             key={index}
+            index={index}
             design={design}
+            preview={preview}
             quantity={quantities[index] ?? 0}
             placed={placedPerDesign?.[index] ?? null}
             onChange={(value) => setOne(index, value)}
@@ -63,12 +70,16 @@ export default function DesignList({
 }
 
 function DesignRow({
+  index,
   design,
+  preview,
   quantity,
   placed,
   onChange,
 }: {
+  index: number;
   design: VectorPath;
+  preview: PagePreview | null;
   quantity: number;
   placed: number | null;
   onChange: (value: number) => void;
@@ -91,19 +102,25 @@ function DesignRow({
 
   return (
     <li className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/60 px-2.5 py-2">
+      {/* The sticker itself, which is the page seen through its cut contour.
+          Drawing the outline alone made every name sticker an identical blob. */}
       <svg
         viewBox={`${box.minX - pad} ${box.minY - pad} ${
           box.maxX - box.minX + pad * 2
         } ${box.maxY - box.minY + pad * 2}`}
-        className="h-9 w-9 shrink-0"
+        className="h-11 w-11 shrink-0"
       >
+        {preview && (
+          <defs>
+            <StickerClip id={`row-${index}`} design={design} preview={preview} />
+          </defs>
+        )}
         <g transform={`translate(0, ${box.minY + box.maxY}) scale(1, -1)`}>
-          <path
-            d={toSvgPath(design)}
-            fill="#1e3a5f"
-            stroke="#22d3ee"
-            strokeWidth={Math.max(box.maxX - box.minX, box.maxY - box.minY) * 0.02}
-          />
+          {preview ? (
+            <use href={`#row-${index}-art`} />
+          ) : (
+            <path d={toSvgPathFallback(design)} fill="#1e3a5f" />
+          )}
         </g>
       </svg>
 
@@ -127,4 +144,13 @@ function DesignRow({
       />
     </li>
   );
+}
+
+// Only reached before the page has finished rendering, when there is nothing to
+// show the sticker with.
+function toSvgPathFallback(design: VectorPath): string {
+  const parts = [`M ${design.start.x} ${design.start.y}`];
+  for (const s of design.segments)
+    parts.push(`C ${s.c1.x} ${s.c1.y} ${s.c2.x} ${s.c2.y} ${s.end.x} ${s.end.y}`);
+  return parts.join(" ") + " Z";
 }
