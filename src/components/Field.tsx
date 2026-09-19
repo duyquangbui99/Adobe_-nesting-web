@@ -18,8 +18,8 @@ export function NumberField({
   step?: number;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3">
-      <span className="text-sm text-neutral-400">{label}</span>
+    <label className="flex items-center justify-between gap-2">
+      <span className="text-xs text-neutral-400">{label}</span>
       <span className="flex items-center gap-1.5">
         <input
           type="number"
@@ -27,7 +27,7 @@ export function NumberField({
           min={min}
           step={step}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-24 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-right text-sm tabular-nums text-neutral-100 focus:border-cyan-400 focus:outline-none"
+          className="w-20 rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-right text-sm tabular-nums text-neutral-100 focus:border-cyan-400 focus:outline-none"
         />
         {suffix && <span className="w-8 text-xs text-neutral-500">{suffix}</span>}
       </span>
@@ -47,8 +47,8 @@ export function Choice<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm text-neutral-400">{label}</span>
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-neutral-400">{label}</span>
       <div className="flex overflow-hidden rounded-md border border-neutral-700">
         {options.map((option) => (
           <button
@@ -88,8 +88,8 @@ export function Toggle({
         className="mt-0.5 h-4 w-4 accent-cyan-400"
       />
       <span>
-        <span className="text-sm text-neutral-300">{label}</span>
-        {hint && <span className="block text-xs text-neutral-600">{hint}</span>}
+        <span className="text-xs text-neutral-300">{label}</span>
+        {hint && <span className="mt-0.5 block text-[11px] leading-snug text-neutral-600">{hint}</span>}
       </span>
     </label>
   );
@@ -103,11 +103,11 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+    <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-3">
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
         {title}
       </h2>
-      <div className="space-y-3">{children}</div>
+      <div className="space-y-2">{children}</div>
     </section>
   );
 }

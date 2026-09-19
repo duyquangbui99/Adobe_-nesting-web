@@ -34,7 +34,7 @@ export default function DesignList({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs text-neutral-500">
+      <div className="flex items-center justify-between text-[11px] text-neutral-500">
         <span>
           {designs.length} shape{designs.length === 1 ? "" : "s"}, {total} piece
           {total === 1 ? "" : "s"} requested
@@ -52,7 +52,7 @@ export default function DesignList({
         </span>
       </div>
 
-      <ul className="space-y-1.5">
+      <ul className="max-h-[22rem] space-y-1 overflow-y-auto pr-1">
         {designs.map((design, index) => (
           <DesignRow
             key={index}
@@ -101,14 +101,14 @@ function DesignRow({
   const short = placed !== null && placed < quantity;
 
   return (
-    <li className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/60 px-2.5 py-2">
+    <li className="flex items-center gap-2.5 rounded-lg border border-neutral-800 bg-neutral-900/60 px-2 py-1.5">
       {/* The sticker itself, which is the page seen through its cut contour.
           Drawing the outline alone made every name sticker an identical blob. */}
       <svg
         viewBox={`${box.minX - pad} ${box.minY - pad} ${
           box.maxX - box.minX + pad * 2
         } ${box.maxY - box.minY + pad * 2}`}
-        className="h-11 w-11 shrink-0"
+        className="h-10 w-10 shrink-0"
       >
         {preview && (
           <defs>
@@ -125,11 +125,11 @@ function DesignRow({
       </svg>
 
       <div className="min-w-0 flex-1">
-        <div className="text-xs tabular-nums text-neutral-300">
+        <div className="text-[11px] tabular-nums text-neutral-300">
           {width.toFixed(0)} × {height.toFixed(0)} mm
         </div>
         {placed !== null && (
-          <div className={`text-xs ${short ? "text-amber-400" : "text-neutral-600"}`}>
+          <div className={`text-[11px] ${short ? "text-amber-400" : "text-neutral-600"}`}>
             {placed} placed
           </div>
         )}

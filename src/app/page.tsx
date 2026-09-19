@@ -257,12 +257,12 @@ export default function Home() {
 
   const sourceScale = useMemo(() => {
     if (state.status !== "ready") return 1;
-    return Math.min(640 / state.page.width, 720 / state.page.height);
+    return Math.min(700 / state.page.width, 760 / state.page.height);
   }, [state]);
 
   const layoutScale = useMemo(
     () =>
-      Math.min(640 / (sheet.widthMm * MM_TO_PT), 720 / (sheet.heightMm * MM_TO_PT)),
+      Math.min(700 / (sheet.widthMm * MM_TO_PT), 760 / (sheet.heightMm * MM_TO_PT)),
     [sheet]
   );
 
@@ -285,7 +285,7 @@ export default function Home() {
         sheetSummary={`${sheet.widthMm.toFixed(0)} × ${sheet.heightMm.toFixed(0)} mm`}
       />
 
-      <div className="mx-auto max-w-7xl px-6 py-8">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
         {state.status !== "ready" ? (
           <div
             onDragOver={(e) => {
@@ -320,8 +320,8 @@ export default function Home() {
             )}
           </div>
         ) : (
-          <div className="grid gap-8 lg:grid-cols-[1fr_340px]">
-            <div className="space-y-3">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_290px_270px]">
+            <div className="space-y-2">
               <div className="flex items-center gap-2">
                 {(["source", "layout"] as const).map((mode) => {
                   const enabled = mode === "source" || Boolean(result?.ok && result.placements.length);
@@ -368,7 +368,7 @@ export default function Home() {
               </div>
             </div>
 
-            <aside className="space-y-4">
+            <aside className="space-y-3">
               {cutPaths.length > 0 ? (
                 <Section title="Quantities">
                   <DesignList
@@ -391,6 +391,9 @@ export default function Home() {
                 </Section>
               )}
 
+            </aside>
+
+            <aside className="space-y-3">
               <NestSettingsPanel
                 nesting={nestOptions}
                 onChange={(next) => {
