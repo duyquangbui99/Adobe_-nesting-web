@@ -2,10 +2,13 @@
 //
 // Three things go onto the page, and only the first is about looking right.
 //
-// The artwork: the source page embedded once as a form, drawn again per
-// sticker, clipped to that sticker's cut contour and transformed into place.
-// Nothing is redrawn, so vectors, raster images, spot colours and overprint all
-// survive, because none of them are reinterpreted.
+// The artwork: the source page embedded once as a form, then cut down to one
+// form per design holding only what can paint inside that design's contour,
+// drawn per sticker and still clipped to that contour. Nothing is redrawn, so
+// vectors, raster images, spot colours and overprint all survive, because none
+// of them are reinterpreted. The trim removes only what the clip was already
+// hiding, which is what stops Illustrator opening a seven-design sheet with
+// all seven designs inside every sticker.
 //
 // The cut contours: the same outlines as unfilled stroked paths on a layer of
 // their own, stroked in a spot colour named CutContour. Without these the sheet
@@ -20,11 +23,14 @@
 // two we replace have to be switched off by name, or they print. See below.
 
 import {
+  PDFArray,
   PDFDict,
   PDFDocument,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFOperator,
+  PDFRawStream,
   PDFOperatorNames,
   PDFString,
   appendBezierCurve,
@@ -39,9 +45,11 @@ import {
   pushGraphicsState,
   setLineWidth,
   stroke,
+  decodePDFRawStream,
 } from "pdf-lib";
-import type { PDFPage, PDFRef } from "pdf-lib";
+import type { PDFObject, PDFPage, PDFRef } from "pdf-lib";
 
+import { trimContent, type Box, type Matrix, type XObjectInfo } from "./trim";
 import type { VectorPath } from "./extract";
 import type { RegistrationMarks } from "./marks";
 import type { NestPlacement, NestResult } from "@/lib/engine";
@@ -87,6 +95,120 @@ function addResource(page: PDFPage, category: string, key: string, value: PDFRef
   bucket.set(PDFName.of(key), value);
 }
 
+/** Stroke weights and join miters reach past a path's own bounds. */
+const TRIM_MARGIN_PT = 2;
+
+function boxOf(path: VectorPath): Box {
+  return {
+    minX: path.bounds.minX - TRIM_MARGIN_PT,
+    minY: path.bounds.minY - TRIM_MARGIN_PT,
+    maxX: path.bounds.maxX + TRIM_MARGIN_PT,
+    maxY: path.bounds.maxY + TRIM_MARGIN_PT,
+  };
+}
+
+/** Tells the trimmer how big each XObject the stream draws actually is. */
+function xObjectLookup(doc: PDFDocument, resources: PDFObject | undefined) {
+  const dictionary = resources
+    ? doc.context.lookupMaybe(resources, PDFDict)
+    : undefined;
+  const bucket = dictionary
+    ? doc.context.lookupMaybe(dictionary.get(PDFName.of("XObject")), PDFDict)
+    : undefined;
+
+  return (name: string): XObjectInfo => {
+    if (!bucket) return null;  // unknown, so the trimmer keeps it
+    const entry = doc.context.lookup(bucket.get(PDFName.of(name)));
+    if (!(entry instanceof PDFRawStream)) return null;
+    const dict = entry.dict;
+    if (dict.get(PDFName.of("Subtype")) === PDFName.of("Image")) return { kind: "image" };
+
+    const box = doc.context.lookupMaybe(dict.get(PDFName.of("BBox")), PDFArray);
+    if (!box || box.size() < 4) return null;
+    const at = (array: PDFArray, i: number) => array.lookup(i, PDFNumber).asNumber();
+    const matrix = doc.context.lookupMaybe(dict.get(PDFName.of("Matrix")), PDFArray);
+    return {
+      kind: "form",
+      bbox: {
+        minX: Math.min(at(box, 0), at(box, 2)),
+        minY: Math.min(at(box, 1), at(box, 3)),
+        maxX: Math.max(at(box, 0), at(box, 2)),
+        maxY: Math.max(at(box, 1), at(box, 3)),
+      },
+      matrix:
+        matrix && matrix.size() >= 6
+          ? (Array.from({ length: 6 }, (_, i) => at(matrix, i)) as Matrix)
+          : [1, 0, 0, 1, 0, 0],
+    };
+  };
+}
+
+/**
+ * One form per design, holding only the operations that can paint inside that
+ * design's contour.
+ *
+ * A design with nothing to drop is left out and the caller draws the whole page
+ * for it instead, as is every design if the source's content cannot be read at
+ * all. An untrimmed sheet is only heavy, and heavy beats wrong.
+ */
+function buildStickerForms(
+  doc: PDFDocument,
+  pageForm: PDFRef,
+  pathForDesign: Map<number, VectorPath>
+): Map<number, PDFRef> {
+  const forms = new Map<number, PDFRef>();
+
+  const stream = doc.context.lookup(pageForm);
+  if (!(stream instanceof PDFRawStream)) return forms;
+
+  let content: Uint8Array;
+  try {
+    content = decodePDFRawStream(stream).decode();
+  } catch {
+    return forms;
+  }
+
+  // The clip and the cut contours are written in the page's own coordinates,
+  // and so is the target box below. That only holds while the embedded form
+  // does not transform its contents. It never has yet, and if it ever does the
+  // untrimmed sheet is still correct.
+  const matrix = doc.context.lookupMaybe(stream.dict.get(PDFName.of("Matrix")), PDFArray);
+  if (matrix) {
+    const identity = [1, 0, 0, 1, 0, 0];
+    const same =
+      matrix.size() === 6 &&
+      identity.every((v, i) => Math.abs(matrix.lookup(i, PDFNumber).asNumber() - v) < 1e-9);
+    if (!same) return forms;
+  }
+
+  const resources = stream.dict.get(PDFName.of("Resources"));
+  const lookup = xObjectLookup(doc, resources);
+
+  for (const [designIndex, path] of pathForDesign) {
+    const target = boxOf(path);
+    let trimmed;
+    try {
+      trimmed = trimContent(content, target, lookup);
+    } catch {
+      continue;
+    }
+    if (trimmed.dropped === 0) continue;
+
+    const form = doc.context.flateStream(trimmed.bytes, {
+      Type: "XObject",
+      Subtype: "Form",
+      FormType: 1,
+      // Tight to the design, so Illustrator stops drawing a page-sized box
+      // around every sticker.
+      BBox: [target.minX, target.minY, target.maxX, target.maxY],
+      Matrix: [1, 0, 0, 1, 0, 0],
+      ...(resources ? { Resources: resources } : {}),
+    });
+    forms.set(designIndex, doc.context.register(form));
+  }
+  return forms;
+}
+
 export interface ExportOptions {
   sourceBytes: Uint8Array;
   result: NestResult;
@@ -100,6 +222,12 @@ export interface ExportOptions {
    * cut line prints.
    */
   hiddenLayers?: string[];
+  /**
+   * Cut each design's artwork down to itself. Off, every sticker carries the
+   * whole source page behind its clip, which is heavier but is exactly what a
+   * PDF reader saw before the trim existed.
+   */
+  trimArtwork?: boolean;
 }
 
 export async function exportNestedPdf({
@@ -109,10 +237,18 @@ export async function exportNestedPdf({
   sheet,
   marks,
   hiddenLayers = [],
+  trimArtwork = true,
 }: ExportOptions): Promise<Uint8Array> {
   const out = await PDFDocument.create();
   const [embedded] = await out.embedPdf(sourceBytes, [0]);
   const context = out.context;
+
+  // The embedded page's own objects only reach this document on a flush, and
+  // the trim reads them.
+  await out.flush();
+  const stickerForms = trimArtwork
+    ? buildStickerForms(out, embedded.ref, pathForDesign)
+    : new Map<number, PDFRef>();
 
   // Layers, so a RIP or an operator can isolate the cut from the print.
   const layerRefs: Record<string, PDFRef> = {};
@@ -134,6 +270,10 @@ export async function exportNestedPdf({
   const widthPt = sheet.widthMm * MM_TO_PT;
   const heightPt = sheet.heightMm * MM_TO_PT;
 
+  // When every design was trimmed, the page it was all cut out of is left in
+  // the file referenced by nothing, which is a megabyte of nothing.
+  let wholePageDrawn = false;
+
   const bySheet = new Map<number, NestPlacement[]>();
   for (const placement of result.placements) {
     const list = bySheet.get(placement.sheetIndex) ?? [];
@@ -143,12 +283,24 @@ export async function exportNestedPdf({
 
   for (const sheetIndex of [...bySheet.keys()].sort((a, b) => a - b)) {
     const page = out.addPage([widthPt, heightPt]);
-    const artwork = page.node.newXObject("Sticker", embedded.ref);
     addResource(page, "ColorSpace", "CutCS", cutSpace);
     for (const [name, ref] of Object.entries(layerRefs))
       addResource(page, "Properties", name, ref);
 
     const placements = bySheet.get(sheetIndex)!;
+
+    // Each design draws its own trimmed form, or the whole page when there was
+    // nothing worth trimming out of it.
+    const artworkFor = new Map<number, PDFName>();
+    for (const placement of placements)
+      if (!artworkFor.has(placement.designIndex)) {
+        const trimmed = stickerForms.get(placement.designIndex);
+        if (!trimmed) wholePageDrawn = true;
+        artworkFor.set(
+          placement.designIndex,
+          page.node.newXObject(`Sticker${placement.designIndex}`, trimmed ?? embedded.ref)
+        );
+      }
 
     // Artwork first, so the cut lines and marks draw over it.
     page.pushOperators(beginLayer("Print"));
@@ -166,7 +318,7 @@ export async function exportNestedPdf({
         ...pathOperators(path),
         clip(),
         endPath(),
-        drawObject(artwork),
+        drawObject(artworkFor.get(placement.designIndex)!),
         popGraphicsState()
       );
     }
@@ -218,6 +370,8 @@ export async function exportNestedPdf({
       page.pushOperators(endLayer());
     }
   }
+
+  if (!wholePageDrawn) context.delete(embedded.ref);
 
   // The source's layers arrive inside the embedded form, and an optional
   // content group that no configuration mentions is visible by default. For the
