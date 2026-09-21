@@ -59,6 +59,18 @@ export function summariseLayers(page: PageGeometry): LayerSummary[] {
   });
 }
 
+/**
+ * Whether a layer holds cut contours and nothing else.
+ *
+ * An export can only switch the source's cut layer off if this is true. One
+ * real sheet keeps its cut lines on a layer of their own, and another draws
+ * them on the same layer as half the artwork; switching the second off takes
+ * the artwork with it.
+ */
+export function holdsOnlyCutLines(summary: LayerSummary): boolean {
+  return summary.paths > 0 && summary.cutLike === summary.paths;
+}
+
 /** The layer that most looks like it holds the cut contours. */
 export function guessCutLayer(summaries: LayerSummary[]): string | null {
   const candidates = summaries.filter((s) => s.cutLike > 0);
